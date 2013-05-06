@@ -129,7 +129,8 @@ def up_task(config, task_id, date, fields):
     # Set all fields
     now = datetime.datetime.now()
     for key, value in fields.iteritems():
-        config.set(section_id, key, value)
+        if value is not None:
+            config.set(section_id, key, value)
 
     config.set(section_id, 'update', "%s" % now.strftime(DATEFORMAT))
     
