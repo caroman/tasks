@@ -1,0 +1,367 @@
+#!/usr/bin/env python
+
+import argparse
+import copy
+import ConfigParser
+import datetime
+import getpass
+import logging
+import os
+import textwrap
+import time
+import sys
+from collections import OrderedDict
+
+os.environ['TZ'] = 'UTC'
+time.tzset()
+
+DATEFORMAT="%Y%m%dT%H%M%S"
+
+DEFAULT_TASK = {
+    'id': None,
+    'project': None,
+    'owner': None,
+    'status': None,
+    'date': None,
+    'title': None,
+    'description': None
+}
+
+def pretty_print(config, task_id):
+    section_id = 'Task %s' % task_id.replace("Task ", "")
+    try:
+        items = config.items(section_id)
+    except ConfigParser.NoSectionError as error:
+        print >> sys.stderr, error
+        return
+    title = "Task %s" % config.get(section_id, 'title')
+    print title.title()
+    print "-" * len(title)
+    print ""
+    for item in OrderedDict(sorted(items, key=lambda t: t[0])).iteritems():
+        print "    * %s: %s" % (item[0].title(), item[1])
+    print ""
+
+def one_line_print(config, task_id, fields):
+    section_id = 'Task %s' % task_id.replace("Task ", "")
+    valid = []
+    for key, value in [item for item in fields.items() if item[1] != None]:
+        if config.has_option(section_id, key) \
+            and config.get(section_id, key) == value:
+            valid.append(True)
+        else:
+            valid.append(False)
+    if all(valid):
+        try:
+            status = config.get(section_id, 'status')
+        except ConfigParser.NoOptionError:
+            status = None
+
+        try:
+            owner = config.get(section_id, 'owner')
+        except ConfigParser.NoOptionError:
+            owner = None
+
+        try:
+            project = config.get(section_id, 'project')
+        except ConfigParser.NoOptionError:
+            project = None
+
+        try:
+            title = config.get(section_id, 'title')
+        except ConfigParser.NoOptionError:
+            title = None
+
+
+        print "[%s]\tstatus=%s\towner=%s\tproject=%s\t%s" % \
+            (section_id, status, owner, project, title)
+
+def mk_task(config, task_id, date, fields):
+    section_id = 'Task %s' % task_id.replace("Task ", "")
+    if config.has_section(section_id):
+        print "Task already exists:", section_id
+        return 1 
+    config.add_section(section_id)
+    task = copy.copy(DEFAULT_TASK)
+    task.update(fields)
+    task['id'] = task_id
+    task['date'] = date.strftime(DATEFORMAT)
+    comment = task.get('comment', None)
+    description = task.get('description', None)
+    if comment:
+        del task['comment']
+    if description:
+        del task['description']
+        
+    for key, value in task.iteritems():
+        config.set(section_id, key, value)
+
+    if description == "-":
+        config.set(section_id, 'description', sys.stdin.read())
+    else:
+        config.set(section_id, 'description', description)
+
+    if comment:
+        config.set(section_id, 'comment %s' % task['date'], comment)
+
+
+def up_task(config, task_id, date, fields):
+    section_id = 'Task %s' % task_id.replace("Task ", "")
+    if not config.has_section(section_id):
+        print >> sys.stderr, "Task not found:", section_id
+        return 1
+
+    fields['date'] = date.strftime(DATEFORMAT)
+
+    if fields.has_key('description'):
+        description = fields['description']
+        del fields['description']
+    else:
+        description = None
+
+    if fields.has_key('comment'):
+        comment = fields['comment']
+        del fields['comment']
+    else:
+        comment = None
+
+
+    # Set all fields
+    now = datetime.datetime.now()
+    for key, value in fields.iteritems():
+        config.set(section_id, key, value)
+
+    config.set(section_id, 'update', "%s" % now.strftime(DATEFORMAT))
+    
+    if description and description == "-":
+        config.set(section_id, 'description', sys.stdin.read())
+    elif description: 
+        config.set(section_id, 'description', description)
+
+    if comment:
+        config.set(section_id, 'comment %s' % now.strftime(DATEFORMAT), comment)
+
+def rm_task(config, task_id, fields, fields_only=False):
+    section_id = 'Task %s' % task_id.replace("Task ", "")
+    if not config.has_section(section_id):
+        print >> sys.stderr, "Task not found:", section_id
+        return
+
+    if fields_only:
+        for key, value in fields.iteritems():
+            if value is not None and config.has_option(section_id, key):
+                config.remove_option(section_id, key)
+    else:
+        valid = []
+        for key, value in fields.iteritems():
+            if value is not None \
+                and config.has_option(section_id, key) \
+                and config.get(section_id, key) == value:
+                valid.append(True)
+            elif value is not None:
+                valid.append(False)
+        if all(valid):
+            config.remove_section(section_id)
+
+
+def main(argv=None):
+
+    class NameValueAction(argparse.Action):
+        """
+        Action to retrive list of values in the format NAME=VALUE
+        """
+        def __call__(self, parser, namespace, values, option_string=None):
+            value = getattr(namespace, self.dest)
+            if not isinstance(value, dict):
+                value = {}
+            #: Support for values with character '='
+            name_value = [ tuple(v.split('=')) for v in values.split(',') ]
+            value.update(name_value)
+            setattr(namespace, self.dest, value)
+
+
+    desc = "Text Task System"
+    parser = argparse.ArgumentParser(description=desc)
+
+    parser.add_argument('--verbose'
+        ,'-v'
+        ,metavar='verbose'
+        ,action='store'
+        ,dest='verbose'
+        ,nargs='?'
+        ,const='debug'
+        ,default='info'
+        ,choices=['debug', 'info', 'warning', 'error', 'critical']
+        ,help="""Levels %(choices)s. Default %(default)s. Const %(const)s""")
+
+    parser.add_argument(metavar="ACTION"
+        ,dest="action"
+        ,choices=["mk", "up", "rm", "ls", "cat"]
+        ,help='Action to be done. Choices %(choices)s')
+
+    parser.add_argument("--task_cfg"
+        ,metavar="FILENAME"
+        ,default=os.path.expanduser('~/.tasks.cfg')
+        ,help='Task config. Default %(default)s.')
+
+    parser.add_argument("--task_file"
+        ,metavar="FILENAME"
+        ,default='tasks.txt'
+        ,help='Task file. Default %(default)s.')
+
+    parser.add_argument("-p", "--project"
+        ,default=None
+        ,help='Task project.')
+
+    parser.add_argument("-o", "--owner"
+        ,default=None
+        ,help='Task owner.')
+
+    parser.add_argument("-s", "--status"
+        ,choices=["open", "doing", "close"]
+        ,help='Task status. Choices %(choices)s.')
+
+    parser.add_argument("-t", "--title"
+        ,default=None
+        ,help='Task title.')
+
+    parser.add_argument("-d", "--description"
+        ,default=None
+        ,help='Task description.')
+
+    parser.add_argument("-c", "--comment"
+        ,default=None
+        ,help='Add comment to task.')
+
+    parser.add_argument("-f"
+        ,"--field"
+        ,dest="fields"
+        ,metavar="FIELD=VALUE"
+        ,action=NameValueAction
+        ,default={}
+        ,help="Add any field as task field.")
+
+    parser.add_argument("--fields-only"
+        ,dest="fields_only"
+        ,action="store_true"
+        ,default=False
+        ,help="""Used by rm action. Delete fields only instead of the task.
+            Default %(default)s.""")
+
+    parser.add_argument(metavar="TASKID"
+        ,dest="task_id"
+        ,nargs='*'
+        ,default=None
+        ,help='Task ID.')
+
+    args = parser.parse_args(argv[1:])
+
+    # Prepare logging
+    if args.verbose == 'debug':
+        logging.basicConfig(level=logging.DEBUG)
+    elif args.verbose == 'info':
+        logging.basicConfig(level=logging.INFO)
+    elif args.verbose == 'warning':
+        logging.basicConfig(level=logging.WARNING)
+    elif args.verbose == 'error':
+        logging.basicConfig(level=logging.ERROR)
+    elif args.verbose == 'critical':
+        logging.basicConfig(level=logging.CRITICAL)
+
+    # Read tasks files
+    task_files = [args.task_file]
+    if os.path.exists(args.task_cfg):
+        task_files += [line.rstrip('\n') 
+            for line in open(args.task_cfg, 'r').readlines()
+            if not line.startswith('#')]
+    logging.debug("Reading tasks from: %s", task_files)
+    config = ConfigParser.ConfigParser()
+    read_task_files = config.read(task_files)
+    if len(task_files) != len(read_task_files):
+        missing_files = set(task_files) - set(read_task_files)
+        for task_file in missing_files:
+            logging.warning("Task file not loaded: %s", task_file)
+
+    # Prepare task ids
+    if args.task_id and not isinstance(args.task_id, list):
+        args.task_id = [args.task_id]
+    elif not args.task_id:
+        args.task_id = []
+ 
+    # Prepare input fields
+    fields = {
+        'project': args.project,
+        'owner': args.owner,
+        'status': args.status,
+        'title': args.title,
+        'description': args.description,
+        'comment': args.comment
+    }
+    fields.update(args.fields)
+
+    # MAKE TASK
+    if args.action == "mk":
+        if len(args.task_id) == 0:
+            args.task_id = ['%s' % int(time.time())]
+        if not args.owner:
+            fields['owner'] = getpass.getuser()
+        if not args.status:
+            fields['status'] = "open"
+
+        now = datetime.datetime.now()
+        for task_id in args.task_id:
+            mk_task(config, task_id, now, fields)
+
+        with open(args.task_file, 'w') as tfile:
+            config.write(tfile)
+            [pretty_print(config, "Task %s" % task_id) for task_id in args.task_id]
+
+    # UPDATE TASK
+    elif args.action == "up":
+        now = datetime.datetime.now()
+        for task_id in args.task_id:
+            up_task(config, task_id, now, fields)
+
+        with open(args.task_file, 'w') as tfile:
+            config.write(tfile)
+            [pretty_print(config, "Task %s" % task_id) for task_id in args.task_id]
+
+    # DELETE TASK
+    elif args.action == "rm":
+        if len(args.task_id):
+            for task_id in args.task_id:
+                rm_task(config, task_id, fields, args.fields_only)
+        else:
+            for task_id in reversed(config.sections()):
+                rm_task(config, task_id, fields, args.fields_only)
+        
+        with open(args.task_file, 'w') as tfile:
+            config.write(tfile)
+
+    # LIST TASK
+    elif args.action == "ls":
+        if len(args.task_id):
+            for task_id in args.task_id:
+                one_line_print(config, task_id, fields)
+        else:
+            for task_id in reversed(config.sections()):
+                one_line_print(config, task_id, fields)
+        
+    # CAT TASK
+    elif args.action == "cat":
+        if len(args.task_id):
+            [pretty_print(config, task_id) for task_id in args.task_id]
+        else:
+            for task_id in reversed(config.sections()):
+                 pretty_print(config, task_id)
+    else:
+        print >> sys.stderr, "[ERROR] Action not understood"
+        return 1
+
+    return 0
+
+#####################################################################
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+
+
