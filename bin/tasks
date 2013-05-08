@@ -133,7 +133,7 @@ def up_task(config, task_id, date, fields):
             config.set(section_id, key, value)
 
     config.set(section_id, 'update', "%s" % now.strftime(DATEFORMAT))
-    
+
     if description and description == "-":
         config.set(section_id, 'description', sys.stdin.read())
     elif description: 
@@ -257,6 +257,7 @@ def main(argv=None):
 
     args = parser.parse_args(argv[1:])
 
+
     # Prepare logging
     if args.verbose == 'debug':
         logging.basicConfig(level=logging.DEBUG)
@@ -269,26 +270,6 @@ def main(argv=None):
     elif args.verbose == 'critical':
         logging.basicConfig(level=logging.CRITICAL)
 
-    # Read tasks files
-    task_files = [args.task_file]
-    if os.path.exists(args.task_cfg):
-        task_files += [line.rstrip('\n') 
-            for line in open(args.task_cfg, 'r').readlines()
-            if not line.startswith('#')]
-    logging.debug("Reading tasks from: %s", task_files)
-    config = ConfigParser.ConfigParser()
-    read_task_files = config.read(task_files)
-    if len(task_files) != len(read_task_files):
-        missing_files = set(task_files) - set(read_task_files)
-        for task_file in missing_files:
-            logging.warning("Task file not loaded: %s", task_file)
-
-    # Prepare task ids
-    if args.task_id and not isinstance(args.task_id, list):
-        args.task_id = [args.task_id]
-    elif not args.task_id:
-        args.task_id = []
- 
     # Prepare input fields
     fields = {
         'project': args.project,
@@ -302,6 +283,9 @@ def main(argv=None):
 
     # MAKE TASK
     if args.action == "mk":
+        config = ConfigParser.ConfigParser()
+        config.read(args.task_file)
+
         if len(args.task_id) == 0:
             args.task_id = ['%s' % int(time.time())]
         if not args.owner:
@@ -319,6 +303,9 @@ def main(argv=None):
 
     # UPDATE TASK
     elif args.action == "up":
+        config = ConfigParser.ConfigParser()
+        config.read(args.task_file)
+
         now = datetime.datetime.now()
         for task_id in args.task_id:
             up_task(config, task_id, now, fields)
@@ -329,6 +316,9 @@ def main(argv=None):
 
     # DELETE TASK
     elif args.action == "rm":
+        config = ConfigParser.ConfigParser()
+        config.read(args.task_file)
+
         if len(args.task_id):
             for task_id in args.task_id:
                 rm_task(config, task_id, fields, args.fields_only)
@@ -341,6 +331,21 @@ def main(argv=None):
 
     # LIST TASK
     elif args.action == "ls":
+        # Read task files
+        task_files = [args.task_file]
+        if os.path.exists(args.task_cfg):
+            task_files += [line.rstrip('\n') 
+                for line in open(args.task_cfg, 'r').readlines()
+                if not line.startswith('#')]
+        logging.debug("Reading tasks from: %s", task_files)
+        config = ConfigParser.ConfigParser()
+        read_task_files = config.read(task_files)
+        if len(task_files) != len(read_task_files):
+            missing_files = set(task_files) - set(read_task_files)
+            for task_file in missing_files:
+                logging.warning("Task file not loaded: %s", task_file)
+
+        # List tasks
         if len(args.task_id):
             for task_id in args.task_id:
                 one_line_print(config, task_id, fields)
@@ -350,6 +355,19 @@ def main(argv=None):
         
     # CAT TASK
     elif args.action == "cat":
+        task_files = [args.task_file]
+        if os.path.exists(args.task_cfg):
+            task_files += [line.rstrip('\n') 
+                for line in open(args.task_cfg, 'r').readlines()
+                if not line.startswith('#')]
+        logging.debug("Reading tasks from: %s", task_files)
+        config = ConfigParser.ConfigParser()
+        read_task_files = config.read(task_files)
+        if len(task_files) != len(read_task_files):
+            missing_files = set(task_files) - set(read_task_files)
+            for task_file in missing_files:
+                logging.warning("Task file not loaded: %s", task_file)
+
         if len(args.task_id):
             [pretty_print(config, task_id) for task_id in args.task_id]
         else:
